@@ -507,7 +507,7 @@ pub fn cmd_implementations(
 }
 
 /// Show cross-references: definitions, imports, usages
-pub fn cmd_refs(root: &Path, symbol: &str, limit: usize, format: &str) -> Result<()> {
+pub fn cmd_refs(root: &Path, symbol: &str, limit: usize, format: &str, scope: &SearchScope) -> Result<()> {
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -517,8 +517,17 @@ pub fn cmd_refs(root: &Path, symbol: &str, limit: usize, format: &str) -> Result
     }
 
     let conn = db::open_db(root)?;
-    let (mut definitions, mut imports, mut usages) =
-        db::find_cross_references(&conn, symbol, limit)?;
+    let (mut definitions, mut imports, mut usages) = if scope.is_empty() {
+        db::find_cross_references(&conn, symbol, limit)?
+    } else {
+        let defs = db::find_symbols_by_name_scoped(&conn, symbol, None, limit, scope)?
+            .into_iter()
+            .filter(|s| s.kind != "import")
+            .collect();
+        let imps = db::find_symbols_by_name_scoped(&conn, symbol, Some("import"), limit, scope)?;
+        let usages = db::find_references_scoped(&conn, symbol, limit, scope)?;
+        (defs, imps, usages)
+    };
 
     let resolver = PathResolver::from_conn(root, &conn);
     definitions.retain(|s| resolver.matches_filter(s.root_path.as_deref()));
@@ -599,11 +608,12 @@ pub fn cmd_hierarchy(root: &Path, name: &str, limit: usize, scope: &SearchScope)
 
     let conn = db::open_db(root)?;
 
-    // Find the class/interface/package
-    let classes = db::find_symbols_by_name(&conn, name, Some("class"), 1)?;
-    let interfaces = db::find_symbols_by_name(&conn, name, Some("interface"), 1)?;
-    let packages = db::find_symbols_by_name(&conn, name, Some("package"), 1)?;
-    let protocols = db::find_symbols_by_name(&conn, name, Some("protocol"), 1)?;
+    // Find the class/interface/package, respecting scope so --in-file picks the right definition
+    // when multiple classes share the same name.
+    let classes    = db::find_symbols_by_name_scoped(&conn, name, Some("class"),     1, scope)?;
+    let interfaces = db::find_symbols_by_name_scoped(&conn, name, Some("interface"), 1, scope)?;
+    let packages   = db::find_symbols_by_name_scoped(&conn, name, Some("package"),   1, scope)?;
+    let protocols  = db::find_symbols_by_name_scoped(&conn, name, Some("protocol"),  1, scope)?;
 
     let target = classes
         .first()
