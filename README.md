@@ -750,6 +750,12 @@ exclude:
 
 ### Unreleased
 
+- **`map` shows the project, not its dependencies** — type declarations the
+  indexer reads from installed packages no longer crowd the summary (on a large
+  Rails + React app they took 24 of the top 50 directories); the header counts
+  them apart, `24127 files (+15351 dependency type declarations)`, and JSON
+  adds `dependency_file_count`. `--module node_modules/<pkg>` still maps a
+  package.
 - **`implementations` leaves out a namesake from another namespace** — a
   parent written `Legacy::ApplicationService` no longer counts as
   `ApplicationService` when the index defines both classes, and

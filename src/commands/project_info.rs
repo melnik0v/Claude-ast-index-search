@@ -22,6 +22,8 @@ struct MapSummaryOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     project: Option<String>,
     file_count: i64,
+    #[serde(skip_serializing_if = "is_zero")]
+    dependency_file_count: i64,
     module_count: i64,
     showing: usize,
     total_dirs: usize,
@@ -43,6 +45,8 @@ struct MapDetailOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     project: Option<String>,
     file_count: i64,
+    #[serde(skip_serializing_if = "is_zero")]
+    dependency_file_count: i64,
     module_count: i64,
     groups: Vec<DetailGroup>,
 }
@@ -119,15 +123,16 @@ pub fn cmd_map(
 
     let conn = db::open_db_leased(root)?;
     let stats = db::get_stats(&conn)?;
+    let totals = MapTotals::load(&conn, stats.module_count)?;
 
-    let depth = if stats.file_count > 5000 { 3 } else { 2 };
+    let depth = if totals.files > 5000 { 3 } else { 2 };
 
     let project = db::get_metadata_value(&conn, crate::indexer::PROJECT_LABEL_KEY)?;
 
     if module.is_some() {
         cmd_map_detailed(
             &conn,
-            &stats,
+            &totals,
             project.as_deref(),
             module,
             per_dir,
@@ -136,10 +141,58 @@ pub fn cmd_map(
             format,
         )?;
     } else {
-        cmd_map_summary(&conn, &stats, project.as_deref(), limit, depth, format)?;
+        cmd_map_summary(&conn, &totals, project.as_deref(), limit, depth, format)?;
     }
 
     Ok(())
+}
+
+/// File counts for the `map` header. The indexer adds type declarations of
+/// installed packages on its own; they are counted apart from the project.
+struct MapTotals {
+    files: i64,
+    dependency_files: i64,
+    modules: i64,
+}
+
+impl MapTotals {
+    fn load(conn: &rusqlite::Connection, modules: i64) -> Result<Self> {
+        let mut totals = MapTotals {
+            files: 0,
+            dependency_files: 0,
+            modules,
+        };
+        let mut stmt = conn.prepare("SELECT path FROM files")?;
+        for path in stmt.query_map([], |row| row.get::<_, String>(0))?.flatten() {
+            if db::is_third_party_path(&path) {
+                totals.dependency_files += 1;
+            } else {
+                totals.files += 1;
+            }
+        }
+        Ok(totals)
+    }
+
+    /// `N files` or `N files (+M dependency type declarations)`.
+    fn files_label(&self) -> String {
+        if self.dependency_files == 0 {
+            format!("{} files", self.files)
+        } else {
+            format!(
+                "{} files (+{} dependency type declarations)",
+                self.files, self.dependency_files
+            )
+        }
+    }
+}
+
+/// Installed packages stay out of the map unless `--module` points into one.
+fn in_map(path: &str, module: Option<&str>) -> bool {
+    !db::is_third_party_path(path) || module.is_some_and(db::is_third_party_path)
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
 }
 
 /// `Project: <label> | ` for the header of `map`, empty for an index built
@@ -151,7 +204,7 @@ fn project_prefix(project: Option<&str>) -> String {
 /// Summary mode: directories + file counts + kind counts, sorted by file_count desc
 fn cmd_map_summary(
     conn: &rusqlite::Connection,
-    stats: &db::DbStats,
+    totals: &MapTotals,
     project: Option<&str>,
     limit: usize,
     depth: usize,
@@ -162,7 +215,7 @@ fn cmd_map_summary(
     {
         let mut stmt = conn.prepare("SELECT path FROM files")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        for path in rows.flatten() {
+        for path in rows.flatten().filter(|path| in_map(path, None)) {
             let dir = dir_prefix(&path, depth);
             *dir_file_counts.entry(dir).or_insert(0) += 1;
         }
@@ -183,7 +236,7 @@ fn cmd_map_summary(
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?;
-        for row in rows.flatten() {
+        for row in rows.flatten().filter(|row| in_map(&row.0, None)) {
             let dir = dir_prefix(&row.0, depth);
             *dir_kind_counts
                 .entry(dir)
@@ -217,8 +270,9 @@ fn cmd_map_summary(
     if format == "json" {
         let output = MapSummaryOutput {
             project: project.map(str::to_string),
-            file_count: stats.file_count,
-            module_count: stats.module_count,
+            file_count: totals.files,
+            dependency_file_count: totals.dependency_files,
+            module_count: totals.modules,
             showing: groups.len(),
             total_dirs,
             groups,
@@ -231,10 +285,10 @@ fn cmd_map_summary(
     println!(
         "{}",
         format!(
-            "{}{} files | {} modules | top {} of {} dirs",
+            "{}{} | {} modules | top {} of {} dirs",
             project_prefix(project),
-            stats.file_count,
-            stats.module_count,
+            totals.files_label(),
+            totals.modules,
             groups.len(),
             total_dirs
         )
@@ -284,7 +338,7 @@ fn cmd_map_summary(
 #[allow(clippy::too_many_arguments)]
 fn cmd_map_detailed(
     conn: &rusqlite::Connection,
-    stats: &db::DbStats,
+    totals: &MapTotals,
     project: Option<&str>,
     module: Option<&str>,
     per_dir: usize,
@@ -331,6 +385,7 @@ fn cmd_map_detailed(
             })
         })?
         .filter_map(|r| r.ok())
+        .filter(|sym| in_map(&sym.path, module))
         .collect()
     } else {
         stmt.query_map([], |row| {
@@ -341,6 +396,7 @@ fn cmd_map_detailed(
             })
         })?
         .filter_map(|r| r.ok())
+        .filter(|sym| in_map(&sym.path, module))
         .collect()
     };
 
@@ -416,7 +472,7 @@ fn cmd_map_detailed(
                 .filter_map(|r| r.ok())
                 .collect()
         };
-        for path in &file_rows {
+        for path in file_rows.iter().filter(|path| in_map(path, module)) {
             let dir = dir_prefix(path, depth);
             *dir_file_counts.entry(dir).or_insert(0) += 1;
         }
@@ -471,8 +527,9 @@ fn cmd_map_detailed(
     if format == "json" {
         let output = MapDetailOutput {
             project: project.map(str::to_string),
-            file_count: stats.file_count,
-            module_count: stats.module_count,
+            file_count: totals.files,
+            dependency_file_count: totals.dependency_files,
+            module_count: totals.modules,
             groups,
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -483,10 +540,10 @@ fn cmd_map_detailed(
     println!(
         "{}",
         format!(
-            "{}{} files | {} modules",
+            "{}{} | {} modules",
             project_prefix(project),
-            stats.file_count,
-            stats.module_count
+            totals.files_label(),
+            totals.modules
         )
         .bold()
     );
