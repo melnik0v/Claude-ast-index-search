@@ -52,12 +52,22 @@ pub fn to_compact(tool: &str, raw_json: &str) -> String {
     }
 
     let trimmed = out.trim_end().to_string();
-    if trimmed.is_empty() {
-        "(no results)".to_string()
-    } else {
-        trimmed
+    if !trimmed.is_empty() {
+        return trimmed;
+    }
+    match tool {
+        "usages" | "callers" | "refs" => NO_INDEXED_REFERENCES.to_string(),
+        _ => "(no results)".to_string(),
     }
 }
+
+/// An empty reference lookup reads as "unused" to an agent, yet the index
+/// cannot see references that exist only at runtime or inside unparsed DSLs.
+const NO_INDEXED_REFERENCES: &str = "(no results) No indexed reference by this name. \
+This does not prove the symbol is unused: dynamic dispatch (metaprogramming, \
+string-built names), DSLs the parsers skip (e.g. Effector, styled-components) and \
+aliased default imports are not indexed. Confirm with a text search before \
+concluding it is unused.";
 
 fn render_search(v: &Value, out: &mut String) -> bool {
     let Some(obj) = v.as_object() else {
@@ -1566,6 +1576,23 @@ mod tests {
             "files":[],"symbols":[],"references":[],"content_matches":[]
         }"#;
         let out = to_compact("search", json);
+        assert_eq!(out, "(no results)");
+    }
+
+    #[test]
+    fn empty_reference_lookups_warn_that_the_index_is_not_exhaustive() {
+        let page = r#"{"items":[],"pagination":{"limit":50,"returned":0}}"#;
+        let refs = r#"{"definitions":[],"imports":[],"usages":[]}"#;
+        for (tool, json) in [("usages", page), ("callers", page), ("refs", refs)] {
+            let out = to_compact(tool, json);
+            assert!(out.starts_with("(no results)"), "{tool}: {out}");
+            assert!(out.contains("text search"), "{tool}: {out}");
+        }
+    }
+
+    #[test]
+    fn empty_definition_lookup_stays_terse() {
+        let out = to_compact("class", r#"{"items":[],"pagination":{"limit":50,"returned":0}}"#);
         assert_eq!(out, "(no results)");
     }
 
