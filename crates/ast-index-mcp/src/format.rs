@@ -41,6 +41,7 @@ pub fn to_compact(tool: &str, raw_json: &str) -> String {
         "symbol" | "class" | "implementations" => render_symbol_list(&value, &mut out),
         "file" | "find_file" => render_file_list(&value, &mut out),
         "stats" => render_stats(&value, &mut out),
+        "map" => render_map(&value, &mut out),
         "changed" => render_changed(&value, &mut out),
         "hotspots" => render_hotspots(&value, &mut out),
         graph if graph.starts_with("graph_") => render_graph(&value, &mut out),
@@ -1371,6 +1372,75 @@ fn render_file_list(v: &Value, out: &mut String) -> bool {
     true
 }
 
+/// Summary: one line per directory with its type counts, most frequent kind
+/// first. With `module`: each directory followed by its types and parents.
+fn render_map(v: &Value, out: &mut String) -> bool {
+    let Some(obj) = v.as_object() else {
+        return false;
+    };
+    let Some(groups) = obj.get("groups").and_then(Value::as_array) else {
+        return false;
+    };
+
+    let count = |key: &str| obj.get(key).and_then(Value::as_i64).unwrap_or(0);
+    let mut header = String::new();
+    if let Some(project) = obj.get("project").and_then(Value::as_str) {
+        write!(header, "{project} | ").ok();
+    }
+    write!(header, "{} files", count("file_count")).ok();
+    let dependency_files = count("dependency_file_count");
+    if dependency_files > 0 {
+        write!(
+            header,
+            " (+{dependency_files} dependency type declarations)"
+        )
+        .ok();
+    }
+    write!(header, " | {} modules", count("module_count")).ok();
+    if let (Some(showing), Some(total)) = (
+        obj.get("showing").and_then(Value::as_u64),
+        obj.get("total_dirs").and_then(Value::as_u64),
+    ) {
+        write!(header, " | top {showing} of {total} dirs").ok();
+    }
+    writeln!(out, "{header}").ok();
+
+    for group in groups {
+        let path = group.get("path").and_then(Value::as_str).unwrap_or("?");
+        let files = group.get("file_count").and_then(Value::as_i64).unwrap_or(0);
+        if let Some(symbols) = group.get("symbols").and_then(Value::as_array) {
+            writeln!(out, "{path} ({files} files)").ok();
+            for s in symbols {
+                let name = s.get("name").and_then(Value::as_str).unwrap_or("?");
+                let kind = s.get("kind").and_then(Value::as_str).unwrap_or("?");
+                write!(out, "  {name} : {kind}").ok();
+                if let Some(parents) = s.get("parents").and_then(Value::as_array) {
+                    let names: Vec<&str> = parents.iter().filter_map(Value::as_str).collect();
+                    if !names.is_empty() {
+                        write!(out, " > {}", names.join(", ")).ok();
+                    }
+                }
+                writeln!(out).ok();
+            }
+            continue;
+        }
+        write!(out, "{path} {files} files").ok();
+        if let Some(kinds) = group.get("kinds").and_then(Value::as_object) {
+            let mut pairs: Vec<(&str, i64)> = kinds
+                .iter()
+                .filter_map(|(k, n)| Some((k.as_str(), n.as_i64()?)))
+                .collect();
+            pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+            let items: Vec<String> = pairs.iter().map(|(k, n)| format!("{n} {k}")).collect();
+            if !items.is_empty() {
+                write!(out, " | {}", items.join(", ")).ok();
+            }
+        }
+        writeln!(out).ok();
+    }
+    true
+}
+
 fn render_stats(v: &Value, out: &mut String) -> bool {
     let Some(obj) = v.as_object() else {
         return false;
@@ -1592,7 +1662,10 @@ mod tests {
 
     #[test]
     fn empty_definition_lookup_stays_terse() {
-        let out = to_compact("class", r#"{"items":[],"pagination":{"limit":50,"returned":0}}"#);
+        let out = to_compact(
+            "class",
+            r#"{"items":[],"pagination":{"limit":50,"returned":0}}"#,
+        );
         assert_eq!(out, "(no results)");
     }
 
@@ -1848,6 +1921,8 @@ mod tests {
     // is a multi-word `search` without literal matches over a small Ruby
     // billing repository: functions come with their source, the `Invoice`
     // class with an outline; `explore.json` is `explore` on the same query.
+    // `map_summary.json` / `map_module.json` are `map` and `map -m app/models`
+    // over a small Ruby app with one installed package's type declarations.
 
     macro_rules! fixture {
         ($name:literal) => {
@@ -1859,6 +1934,29 @@ mod tests {
         out.lines()
             .filter(|line| line.trim_start().starts_with(prefix))
             .count()
+    }
+
+    #[test]
+    fn map_summary_puts_each_directory_on_one_line() {
+        let out = to_compact("map", fixture!("map_summary"));
+        assert_eq!(
+            out,
+            "Web (TypeScript/JavaScript) + Ruby | 4 files \
+             (+1 dependency type declarations) | 0 modules | top 2 of 2 dirs\n\
+             app/models/ 3 files | 3 class, 2 package\n\
+             app/services/ 1 files | 1 class"
+        );
+    }
+
+    #[test]
+    fn map_module_lists_types_with_their_parents() {
+        let out = to_compact("map", fixture!("map_module"));
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[1], "app/models/ (3 files)");
+        assert_eq!(lines[2], "  Billing::Payment : class > ApplicationRecord");
+        assert_eq!(lines[3], "  Billing::Refund : class > Payment");
+        assert_eq!(lines[5], "  Billing : package");
+        assert!(!lines[0].contains("top"), "{out}");
     }
 
     #[test]

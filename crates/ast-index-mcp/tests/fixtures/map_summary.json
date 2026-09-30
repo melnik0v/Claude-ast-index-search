@@ -1,0 +1,25 @@
+{
+  "project": "Web (TypeScript/JavaScript) + Ruby",
+  "file_count": 4,
+  "dependency_file_count": 1,
+  "module_count": 0,
+  "showing": 2,
+  "total_dirs": 2,
+  "groups": [
+    {
+      "path": "app/models/",
+      "file_count": 3,
+      "kinds": {
+        "class": 3,
+        "package": 2
+      }
+    },
+    {
+      "path": "app/services/",
+      "file_count": 1,
+      "kinds": {
+        "class": 1
+      }
+    }
+  ]
+}

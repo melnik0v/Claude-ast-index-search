@@ -756,6 +756,12 @@ exclude:
   them apart, `24127 files (+15351 dependency type declarations)`, and JSON
   adds `dependency_file_count`. `--module node_modules/<pkg>` still maps a
   package.
+- **MCP exposes `map`** — a compact lay of the repo, or of one path with its
+  types and their parents via `module`.
+- **An empty MCP reference lookup says it is not proof of disuse** — `usages`,
+  `callers` and `refs` with no hits point to dynamic dispatch, unparsed DSLs and
+  aliased default imports and ask for a text search before concluding a symbol
+  is unused; the server instructions say the same.
 - **`implementations` leaves out a namesake from another namespace** — a
   parent written `Legacy::ApplicationService` no longer counts as
   `ApplicationService` when the index defines both classes, and

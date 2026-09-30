@@ -1,0 +1,48 @@
+{
+  "project": "Web (TypeScript/JavaScript) + Ruby",
+  "file_count": 4,
+  "dependency_file_count": 1,
+  "module_count": 0,
+  "groups": [
+    {
+      "path": "app/models/",
+      "file_count": 3,
+      "symbols": [
+        {
+          "name": "Billing::Payment",
+          "kind": "class",
+          "parents": [
+            "ApplicationRecord"
+          ],
+          "file": "payment.rb"
+        },
+        {
+          "name": "Billing::Refund",
+          "kind": "class",
+          "parents": [
+            "Payment"
+          ],
+          "file": "refund.rb"
+        },
+        {
+          "name": "Invoice",
+          "kind": "class",
+          "parents": [
+            "ApplicationRecord"
+          ],
+          "file": "invoice.rb"
+        },
+        {
+          "name": "Billing",
+          "kind": "package",
+          "file": "payment.rb"
+        },
+        {
+          "name": "Billing",
+          "kind": "package",
+          "file": "refund.rb"
+        }
+      ]
+    }
+  ]
+}

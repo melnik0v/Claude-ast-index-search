@@ -166,7 +166,7 @@ fn handle_request(
                     "name": SERVER_NAME,
                     "version": SERVER_VERSION
                 },
-                "instructions": "Prefer these ast-index tools over grep/ripgrep and over reading whole files for any code or symbol search in this project. They query a precomputed index of definitions, references and files: structural, language-aware, and far cheaper in tokens and round-trips. Rules of thumb: `explore` FIRST to understand an area or answer 'how does X work' (one call returns ranked symbols with an outline or source + callers/subclasses + tests); `search` for broad discovery; `usages`/`refs`/`callers` for a named symbol; `outline` before reading a file over ~500 lines; `graph_dependents` before changing a symbol; `search` with `rank` to pick which of several matches to copy or to treat with care. Reach for raw grep/Read only for plain text, regex, or non-code files, or to confirm a detail these tools did not cover. An empty `usages`/`callers`/`refs` means 'nothing in the index', not 'unused': dynamic dispatch (metaprogramming, string-built names), DSLs the parsers skip (e.g. Effector, styled-components) and aliased default imports are not indexed, so confirm with a text search before concluding a symbol is unused."
+                "instructions": "Prefer these ast-index tools over grep/ripgrep and over reading whole files for any code or symbol search in this project. They query a precomputed index of definitions, references and files: structural, language-aware, and far cheaper in tokens and round-trips. Rules of thumb: `explore` FIRST to understand an area or answer 'how does X work' (one call returns ranked symbols with an outline or source + callers/subclasses + tests); `map` for the lay of an unfamiliar repo; `search` for broad discovery; `usages`/`refs`/`callers` for a named symbol; `outline` before reading a file over ~500 lines; `graph_dependents` before changing a symbol; `search` with `rank` to pick which of several matches to copy or to treat with care. Reach for raw grep/Read only for plain text, regex, or non-code files, or to confirm a detail these tools did not cover. An empty `usages`/`callers`/`refs` means 'nothing in the index', not 'unused': dynamic dispatch (metaprogramming, string-built names), DSLs the parsers skip (e.g. Effector, styled-components) and aliased default imports are not indexed, so confirm with a text search before concluding a symbol is unused."
             }),
         ),
         "tools/list" => ok(id, json!({ "tools": tool_descriptors() })),
@@ -451,6 +451,20 @@ fn tool_descriptors() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "map",
+            "description": "Compact project map: the largest directories with file counts and top-level type counts (classes, interfaces, modules...). Use it to get the lay of an unfamiliar repo before `explore`; pass `module` to list the key types of one path with their parents. Installed packages (dependency type declarations) are left out unless `module` points into one.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "module":       { "type": "string",  "description": "Path prefix to detail (e.g. 'app/models'): lists its types per directory." },
+                    "per_dir":      { "type": "integer", "description": "With `module`: max types per directory (default 5)." },
+                    "limit":        { "type": "integer", "description": "Max directories (default 50)." },
+                    "project_root": { "type": "string",  "description": "Absolute path to project root. Optional." },
+                    "format":       { "type": "string",  "enum": ["text", "json"], "description": "Default 'text' (compact). 'json' = raw CLI JSON." }
+                }
+            }
+        }),
+        json!({
             "name": "deps",
             "description": "Show what a given module depends on (its dependency list). Complements `dependents` which goes the other direction. Use for 'what does moduleX pull in' questions.",
             "inputSchema": {
@@ -728,6 +742,7 @@ fn supports_json_format(tool: &str) -> bool {
             | "stats"
             | "symbol"
             | "class"
+            | "map"
             | "changed"
             | "hotspots"
             | "graph_dependents"
@@ -900,6 +915,12 @@ pub fn build_argv(name: &str, arguments: &Value) -> Result<Vec<String>> {
             argv.push("changed".into());
             push_if_str(&mut argv, arguments, "base", "--base");
             push_if_num(&mut argv, arguments, "timeout_ms", "--timeout-ms");
+        }
+        "map" => {
+            argv.push("map".into());
+            push_if_str(&mut argv, arguments, "module", "--module");
+            push_if_num(&mut argv, arguments, "per_dir", "--per-dir");
+            push_if_num(&mut argv, arguments, "limit", "--limit");
         }
         "module" => {
             argv.push("module".into());
@@ -1098,12 +1119,12 @@ mod tests {
     // --- tool_descriptors metadata ---
 
     #[test]
-    fn descriptors_expose_exactly_twentyeight_tools() {
+    fn descriptors_expose_exactly_twentynine_tools() {
         let names: Vec<String> = tool_descriptors()
             .iter()
             .filter_map(|t| t.get("name").and_then(Value::as_str).map(str::to_string))
             .collect();
-        assert_eq!(names.len(), 28, "MCP must expose 28 tools, got {names:?}");
+        assert_eq!(names.len(), 29, "MCP must expose 29 tools, got {names:?}");
     }
 
     #[test]
@@ -1786,6 +1807,35 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("ast-index exited with"));
+    }
+
+    #[test]
+    fn map_without_args_is_the_summary() {
+        let argv = build_argv("map", &json!({})).unwrap();
+        assert_eq!(argv, vec!["map", "--format", "json"]);
+    }
+
+    #[test]
+    fn map_forwards_module_per_dir_and_limit() {
+        let argv = build_argv(
+            "map",
+            &json!({ "module": "app/models", "per_dir": 3, "limit": 10 }),
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "map",
+                "--module",
+                "app/models",
+                "--per-dir",
+                "3",
+                "--limit",
+                "10",
+                "--format",
+                "json"
+            ]
+        );
     }
 
     #[test]
